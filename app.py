@@ -407,6 +407,17 @@ def healthz():
     return jsonify({"ok": True, "service": "gtm-guru-lark-bridge"})
 
 
+@app.get("/version")
+def get_version():
+    import subprocess
+    try:
+        commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode("utf-8").strip()
+    except Exception:
+        commit_hash = "unknown"
+    return jsonify({"ok": True, "service": "gtm-guru-lark-bridge", "version": commit_hash})
+
+
+
 @app.post("/webhook/lark")
 def lark_event_handler():
     payload = request.get_json(silent=True) or {}
