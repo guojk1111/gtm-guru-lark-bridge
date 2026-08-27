@@ -313,6 +313,34 @@ def is_p2p_reply_from_aime(event: Dict[str, Any]) -> bool:
     return bool(CONFIG.aime_user_open_id and sender_open_id == CONFIG.aime_user_open_id)
 
 
+def generate_auto_reply(text: str) -> str:
+    text_lower = text.lower()
+    response_lines = ["🎯 GTM GURU:\nHere is the information you might find helpful:"]
+    added = False
+    
+    if any(k in text_lower for k in ["intake", "process", "form"]):
+        response_lines.append("- Intake Form: https://bytedance.us.larkoffice.com/share/base/form/shrusXS9K6b1yLohMHQ443kekFf")
+        response_lines.append("- Intake Tracker: https://bytedance.larkoffice.com/wiki/Lvz0wEuchiPnbhkW1WTcxxApnvb?table=tblvjD6z5aX5U9NU&view=vewBOKkZZp")
+        response_lines.append("- Intake Process Doc: https://bytedance.larkoffice.com/wiki/Gxt6wJmWlivKhRkkM8kcxlO0nEV")
+        added = True
+    elif "tracker" in text_lower:
+        response_lines.append("- Intake Tracker: https://bytedance.larkoffice.com/wiki/Lvz0wEuchiPnbhkW1WTcxxApnvb?table=tblvjD6z5aX5U9NU&view=vewBOKkZZp")
+        added = True
+        
+    if "hub" in text_lower:
+        response_lines.append("- GTM Hub: https://bytedance.larkoffice.com/wiki/HtfdwLhJgi3aavkr8RHcqjKmnke")
+        response_lines.append("- How to Use GTM Hub: https://bytedance.larkoffice.com/wiki/OCAgwLT4Qi7vsIk14MLc9uzMnzh")
+        added = True
+
+    if not added:
+        response_lines.append("- Intake Form: https://bytedance.us.larkoffice.com/share/base/form/shrusXS9K6b1yLohMHQ443kekFf")
+        response_lines.append("- Intake Tracker: https://bytedance.larkoffice.com/wiki/Lvz0wEuchiPnbhkW1WTcxxApnvb?table=tblvjD6z5aX5U9NU&view=vewBOKkZZp")
+        response_lines.append("- Intake Process Doc: https://bytedance.larkoffice.com/wiki/Gxt6wJmWlivKhRkkM8kcxlO0nEV")
+        response_lines.append("- GTM Hub: https://bytedance.larkoffice.com/wiki/HtfdwLhJgi3aavkr8RHcqjKmnke")
+        
+    return "\n".join(response_lines)
+
+
 def relay_group_mention_to_aime(event: Dict[str, Any]) -> Dict[str, Any]:
     if not CONFIG.aime_user_open_id:
         raise BridgeError("AIME_USER_OPEN_ID must be configured before relaying messages")
@@ -331,14 +359,20 @@ def relay_group_mention_to_aime(event: Dict[str, Any]) -> Dict[str, Any]:
     group_message_id = message.get("message_id", "")
     group_thread_id = message.get("thread_id", "")
 
+    auto_reply_text = generate_auto_reply(text)
+    if group_message_id:
+        lark.reply_text(group_message_id, auto_reply_text)
+    else:
+        lark.send_text("chat_id", CONFIG.group_id, auto_reply_text)
+
     relay_text = (
-        f"🎯 GTM GURU Bridge Request\n"
+        f"🎯 GTM GURU Bridge Notification\n"
         f"[bridge_ref={bridge_ref}]\n"
         f"Source group: {CONFIG.group_id}\n"
         f"Source message: {group_message_id}\n"
         f"Requester open_id: {sender_open_id or 'unknown'}\n\n"
         f"Message:\n{text}\n\n"
-        f"Reply to this DM and keep the [bridge_ref=...] token so I can mirror the response back to the Buyer GTM Intake Group."
+        f"I have automatically replied to the group with relevant links."
     )
 
     relay_message_id = lark.send_text("open_id", CONFIG.aime_user_open_id, relay_text)
@@ -350,11 +384,11 @@ def relay_group_mention_to_aime(event: Dict[str, Any]) -> Dict[str, Any]:
         "original_sender_open_id": sender_open_id,
         "original_sender_name": sender_name,
         "relay_message_id": relay_message_id,
-        "status": "pending",
+        "status": "completed",
     }
     store.save_context(context)
-    logger.info("Relayed group mention bridge_ref=%s relay_message_id=%s", bridge_ref, relay_message_id)
-    return {"bridge_ref": bridge_ref, "relay_message_id": relay_message_id}
+    logger.info("Relayed and auto-replied group mention bridge_ref=%s", bridge_ref)
+    return {"bridge_ref": bridge_ref, "relay_message_id": relay_message_id, "auto_replied": True}
 
 
 def mirror_aime_reply_to_group(event: Dict[str, Any]) -> Dict[str, Any]:
