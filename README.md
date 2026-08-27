@@ -106,3 +106,4 @@ docker run --rm -p 8080:8080 \
 - Keep `[bridge_ref=...]` in the DM reply for deterministic routing. If it is missing, the service falls back to the latest pending context.
 - For production hardening, run behind a reverse proxy or cloud function gateway with TLS, access logs, and retry protection.
 - The service intentionally does not print app secrets, access tokens, or credentials in logs.
+
