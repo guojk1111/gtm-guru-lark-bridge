@@ -97,6 +97,16 @@ class StateStore:
                 )
                 """
             )
+            # Deduplication table: stores processed event_ids to prevent duplicate replies
+            # when Lark retries delivery or multiple gunicorn workers race.
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS processed_events (
+                    event_id TEXT PRIMARY KEY,
+                    processed_at INTEGER NOT NULL
+                )
+                """
+            )
 
     def save_context(self, context: Dict[str, Any]) -> None:
         now = int(time.time())
@@ -152,6 +162,24 @@ class StateStore:
                 "UPDATE bridge_context SET status = 'completed', updated_at = ? WHERE bridge_ref = ?",
                 (int(time.time()), bridge_ref),
             )
+
+    def is_event_processed(self, event_id: str) -> bool:
+        """Returns True if this event_id was already processed (dedup check). Atomically marks it processed."""
+        now = int(time.time())
+        with self._connect() as conn:
+            try:
+                conn.execute(
+                    "INSERT INTO processed_events (event_id, processed_at) VALUES (?, ?)",
+                    (event_id, now),
+                )
+                # Clean up old events older than 1 hour to keep the table small
+                conn.execute(
+                    "DELETE FROM processed_events WHERE processed_at < ?",
+                    (now - 3600,),
+                )
+                return False  # Not a duplicate — we just inserted it
+            except sqlite3.IntegrityError:
+                return True  # Duplicate — already processed
 
     def check_rate_limit(self, key: str, window_seconds: int, max_messages: int) -> bool:
         bucket = int(time.time()) // window_seconds
@@ -399,7 +427,7 @@ def mirror_aime_reply_to_group(event: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.get("/healthz")
 def healthz():
-    return jsonify({"ok": True, "service": "gtm-guru-lark-bridge", "build": "v3-no-dm"})
+    return jsonify({"ok": True, "service": "gtm-guru-lark-bridge", "build": "v4-dedup"})
 
 
 @app.get("/version")
@@ -429,8 +457,16 @@ def lark_event_handler():
         logger.warning("Rejected Lark request: %s", reason)
         return jsonify({"code": 401, "msg": reason}), 401
 
+    # --- Deduplication: Lark retries unacknowledged events up to 3x ---
+    # Use event_id from header to ensure we only process each event once.
+    header = payload.get("header", {})
+    event_id = header.get("event_id") or payload.get("event_id", "")
+    if event_id and store.is_event_processed(event_id):
+        logger.info("Duplicate event ignored event_id=%s", event_id)
+        return jsonify({"code": 0, "msg": "duplicate ignored"})
+
     event = payload.get("event", {})
-    event_type = payload.get("header", {}).get("event_type") or payload.get("type")
+    event_type = header.get("event_type") or payload.get("type")
     if event_type and event_type != "im.message.receive_v1":
         return jsonify({"code": 0, "msg": "ignored event type"})
 
