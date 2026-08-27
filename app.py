@@ -342,9 +342,6 @@ def generate_auto_reply(text: str) -> str:
 
 
 def relay_group_mention_to_aime(event: Dict[str, Any]) -> Dict[str, Any]:
-    if not CONFIG.aime_user_open_id:
-        raise BridgeError("AIME_USER_OPEN_ID must be configured before relaying messages")
-
     message = event.get("message", {})
     sender_open_id, sender_name = extract_sender(event)
     if not store.check_rate_limit(
@@ -365,17 +362,6 @@ def relay_group_mention_to_aime(event: Dict[str, Any]) -> Dict[str, Any]:
     else:
         lark.send_text("chat_id", CONFIG.group_id, auto_reply_text)
 
-    relay_text = (
-        f"🎯 GTM GURU Bridge Notification\n"
-        f"[bridge_ref={bridge_ref}]\n"
-        f"Source group: {CONFIG.group_id}\n"
-        f"Source message: {group_message_id}\n"
-        f"Requester open_id: {sender_open_id or 'unknown'}\n\n"
-        f"Message:\n{text}\n\n"
-        f"I have automatically replied to the group with relevant links."
-    )
-
-    relay_message_id = lark.send_text("open_id", CONFIG.aime_user_open_id, relay_text)
     context = {
         "bridge_ref": bridge_ref,
         "group_chat_id": CONFIG.group_id,
@@ -383,12 +369,12 @@ def relay_group_mention_to_aime(event: Dict[str, Any]) -> Dict[str, Any]:
         "group_thread_id": group_thread_id,
         "original_sender_open_id": sender_open_id,
         "original_sender_name": sender_name,
-        "relay_message_id": relay_message_id,
+        "relay_message_id": "",
         "status": "completed",
     }
     store.save_context(context)
-    logger.info("Relayed and auto-replied group mention bridge_ref=%s", bridge_ref)
-    return {"bridge_ref": bridge_ref, "relay_message_id": relay_message_id, "auto_replied": True}
+    logger.info("Auto-replied group mention bridge_ref=%s", bridge_ref)
+    return {"bridge_ref": bridge_ref, "relay_message_id": "", "auto_replied": True}
 
 
 def mirror_aime_reply_to_group(event: Dict[str, Any]) -> Dict[str, Any]:
