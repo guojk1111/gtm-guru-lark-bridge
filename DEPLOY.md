@@ -44,7 +44,7 @@ fly launch --no-deploy   # accept defaults
 fly secrets set LARK_APP_ID=YOUR_APP_ID \
                 LARK_APP_SECRET=YOUR_APP_SECRET \
                 LARK_VERIFICATION_TOKEN=YOUR_VERIFICATION_TOKEN \
-                AIME_USER_OPEN_ID=ou_82ca1e7acc83296b84930b6dd39951da \
+                GEMINI_API_KEY=YOUR_GEMINI_API_KEY \
                 BUYER_GTM_GROUP_ID=oc_8a963e87591fe5023b7da9a7bfa5c9ee \
                 BRIDGE_SECRET_TOKEN=gtmguru2026
 fly deploy
@@ -55,5 +55,4 @@ fly deploy
 - [ ] `GET /healthz` returns `{"ok":true}`
 - [ ] `POST /webhook/lark?bridge_token=gtmguru2026` with `{"type":"url_verification","challenge":"abc","token":"..."}` returns `{"challenge":"abc"}`
 - [ ] Paste URL into Lark Developer Console → Event Subscriptions → Request URL → **Save**
-- [ ] Real @mention in Buyer GTM Intake Group → Jackson gets DM
-- [ ] Reply to DM → group receives `🎯 GTM GURU: …` mirror
+- [ ] Real @mention in Buyer GTM Intake Group → group receives `🎯 GTM GURU: …` reply

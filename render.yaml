@@ -6,7 +6,7 @@ services:
     region: oregon
     branch: main
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60
     healthCheckPath: /healthz
     envVars:
       - key: LARK_APP_ID
@@ -15,8 +15,8 @@ services:
         sync: false
       - key: LARK_VERIFICATION_TOKEN
         sync: false
-      - key: AIME_USER_OPEN_ID
-        value: ou_82ca1e7acc83296b84930b6dd39951da
+      - key: GEMINI_API_KEY
+        sync: false
       - key: BUYER_GTM_GROUP_ID
         value: oc_8a963e87591fe5023b7da9a7bfa5c9ee
       - key: BRIDGE_SECRET_TOKEN

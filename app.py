@@ -6,10 +6,10 @@ import os
 import re
 import sqlite3
 import time
-import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
+import google.generativeai as genai
 import requests
 from flask import Flask, jsonify, request
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -22,6 +22,43 @@ logging.basicConfig(
 logger = logging.getLogger("gtm-guru-lark-bridge")
 
 
+GTM_GURU_SYSTEM_PROMPT = """You are GTM GURU, the AI assistant for the US Buyer Customer Service Operations GTM process at ByteDance/TikTok Shop. You are answering questions posted in the Buyer GTM Intake Group on Lark.
+
+Your knowledge base:
+- GTM Hub (single source of truth): https://bytedance.larkoffice.com/wiki/HtfdwLhJgi3aavkr8RHcqjKmnke
+- How to Use GTM Hub: https://bytedance.larkoffice.com/wiki/OCAgwLT4Qi7vsIk14MLc9uzMnzh
+- GTM Intake Form (submit new requests): https://bytedance.us.larkoffice.com/share/base/form/shrusXS9K6b1yLohMHQ443kekFf
+- GTM Intake Tracker (all active projects): https://bytedance.larkoffice.com/wiki/Lvz0wEuchiPnbhkW1WTcxxApnvb?table=tblvjD6z5aX5U9NU&view=vewBOKkZZp
+- Intake Process Doc: https://bytedance.larkoffice.com/wiki/Gxt6wJmWlivKhRkkM8kcxlO0nEV
+- One-pager template: https://bytedance.us.larkoffice.com/docx/BPy2d2av9oQSegxo5Hsuy5uXssh
+- Reference doc: https://bytedance.larkoffice.com/docx/MW8ydmjomowzaJxQpeCcf5m2nff
+
+Key context:
+- Owner: Jackson Guo (Operations, Seattle)
+- Key teams: SOP team, QA team, OPS team
+- Key stakeholders: Kevin Cabrera, Diana Ornstein, Dazhi Yu
+- Q3 2026 focus: US Buyer GTM process buildout — lock current state, build shared space, run parallel routing via GTM template + AI agent
+- QA must be involved from the START of any change, not after go-live
+- Upstream GNE/Business Ops coordination is OUT OF SCOPE for Q3 (planned Q4)
+- Intake types: Top Down Project (routed to @jenniferwang) | All other types (routed to @kevin.cabrera)
+
+Answer style:
+- Be concise and direct — 3-5 sentences max unless a detailed breakdown is needed
+- Always include the most relevant link(s) from the knowledge base
+- If you don't know the specific answer, point to the GTM Intake Tracker or GTM Hub
+- Never make up project statuses or data — say "check the tracker" if unsure
+"""
+
+GTM_LINKS = {
+    "hub": "GTM Hub: https://bytedance.larkoffice.com/wiki/HtfdwLhJgi3aavkr8RHcqjKmnke",
+    "how_to": "How to Use GTM Hub: https://bytedance.larkoffice.com/wiki/OCAgwLT4Qi7vsIk14MLc9uzMnzh",
+    "form": "GTM Intake Form: https://bytedance.us.larkoffice.com/share/base/form/shrusXS9K6b1yLohMHQ443kekFf",
+    "tracker": "GTM Intake Tracker: https://bytedance.larkoffice.com/wiki/Lvz0wEuchiPnbhkW1WTcxxApnvb?table=tblvjD6z5aX5U9NU&view=vewBOKkZZp",
+    "process": "Intake Process Doc: https://bytedance.larkoffice.com/wiki/Gxt6wJmWlivKhRkkM8kcxlO0nEV",
+    "template": "One-pager template: https://bytedance.us.larkoffice.com/docx/BPy2d2av9oQSegxo5Hsuy5uXssh",
+}
+
+
 @dataclass(frozen=True)
 class Config:
     app_id: str = os.getenv("LARK_APP_ID", "")
@@ -32,10 +69,7 @@ class Config:
     # BRIDGE_SECRET_TOKEN is accepted as an alias for deployment configs that use that name.
     inbound_bearer_token: str = os.getenv("BRIDGE_INBOUND_TOKEN") or os.getenv("BRIDGE_SECRET_TOKEN", "")
     group_id: str = os.getenv("BUYER_GTM_GROUP_ID", "oc_8a963e87591fe5023b7da9a7bfa5c9ee")
-    # Lark APIs require app-scoped open_id for DMs. Username/email cannot be used directly by the send API.
-    aime_user_open_id: str = os.getenv("AIME_USER_OPEN_ID", "ou_82ca1e7acc83296b84930b6dd39951da")
-    aime_user_email: str = os.getenv("AIME_USER_EMAIL", "jackson.guo@bytedance.com")
-    aime_user_display_name: str = os.getenv("AIME_USER_DISPLAY_NAME", "Jackson Guo")
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     lark_api_base: str = os.getenv("LARK_API_BASE", "https://open.larksuite.com/open-apis")
     sqlite_path: str = os.getenv("SQLITE_PATH", "/data/bridge_state.sqlite3")
     request_timeout: int = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "10"))
@@ -67,28 +101,6 @@ class StateStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS bridge_context (
-                    bridge_ref TEXT PRIMARY KEY,
-                    group_chat_id TEXT NOT NULL,
-                    group_message_id TEXT,
-                    group_thread_id TEXT,
-                    original_sender_open_id TEXT,
-                    original_sender_name TEXT,
-                    relay_message_id TEXT,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_bridge_context_status_created
-                ON bridge_context(status, created_at)
-                """
-            )
-            conn.execute(
-                """
                 CREATE TABLE IF NOT EXISTS rate_limit (
                     key TEXT NOT NULL,
                     bucket INTEGER NOT NULL,
@@ -106,61 +118,6 @@ class StateStore:
                     processed_at INTEGER NOT NULL
                 )
                 """
-            )
-
-    def save_context(self, context: Dict[str, Any]) -> None:
-        now = int(time.time())
-        with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO bridge_context (
-                    bridge_ref, group_chat_id, group_message_id, group_thread_id,
-                    original_sender_open_id, original_sender_name, relay_message_id,
-                    status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(bridge_ref) DO UPDATE SET
-                    relay_message_id=excluded.relay_message_id,
-                    status=excluded.status,
-                    updated_at=excluded.updated_at
-                """,
-                (
-                    context["bridge_ref"],
-                    context["group_chat_id"],
-                    context.get("group_message_id"),
-                    context.get("group_thread_id"),
-                    context.get("original_sender_open_id"),
-                    context.get("original_sender_name"),
-                    context.get("relay_message_id"),
-                    context.get("status", "pending"),
-                    context.get("created_at", now),
-                    now,
-                ),
-            )
-
-    def get_by_ref(self, bridge_ref: str) -> Optional[sqlite3.Row]:
-        with self._connect() as conn:
-            return conn.execute(
-                "SELECT * FROM bridge_context WHERE bridge_ref = ?", (bridge_ref,)
-            ).fetchone()
-
-    def get_latest_pending_for_sender(self, sender_open_id: str) -> Optional[sqlite3.Row]:
-        with self._connect() as conn:
-            return conn.execute(
-                """
-                SELECT * FROM bridge_context
-                WHERE status = 'pending'
-                  AND (? = '' OR original_sender_open_id IS NOT NULL)
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (sender_open_id or "",),
-            ).fetchone()
-
-    def mark_completed(self, bridge_ref: str) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                "UPDATE bridge_context SET status = 'completed', updated_at = ? WHERE bridge_ref = ?",
-                (int(time.time()), bridge_ref),
             )
 
     def is_event_processed(self, event_id: str) -> bool:
@@ -318,92 +275,78 @@ def extract_sender(event: Dict[str, Any]) -> Tuple[str, str]:
     return open_id, name
 
 
-def extract_bridge_ref(text: str) -> Optional[str]:
-    match = re.search(r"\[bridge_ref=([a-f0-9\-]{36})\]", text, re.IGNORECASE)
-    return match.group(1) if match else None
-
-
 def is_group_mention_event(event: Dict[str, Any]) -> bool:
     message = event.get("message", {})
     return message.get("chat_type") == "group" and message.get("chat_id") == CONFIG.group_id
 
 
-def is_p2p_reply_from_aime(event: Dict[str, Any]) -> bool:
+def fallback_answer(question: str) -> str:
+    normalized = question.lower()
+    selected_links = []
+
+    if any(keyword in normalized for keyword in ["intake", "submit", "request", "form", "new project", "new change"]):
+        selected_links.extend([GTM_LINKS["form"], GTM_LINKS["process"], GTM_LINKS["tracker"]])
+    elif any(keyword in normalized for keyword in ["status", "tracker", "active", "project", "progress", "blocked", "delayed"]):
+        selected_links.extend([GTM_LINKS["tracker"], GTM_LINKS["hub"]])
+    elif any(keyword in normalized for keyword in ["template", "one-pager", "one pager", "brief"]):
+        selected_links.extend([GTM_LINKS["template"], GTM_LINKS["hub"]])
+    elif any(keyword in normalized for keyword in ["qa", "sop", "ops", "process", "routing", "owner"]):
+        selected_links.extend([GTM_LINKS["process"], GTM_LINKS["hub"], GTM_LINKS["how_to"]])
+    else:
+        selected_links.extend([GTM_LINKS["hub"], GTM_LINKS["tracker"]])
+
+    unique_links = list(dict.fromkeys(selected_links))[:3]
+    return "I couldn’t reach Gemini right now, but here are the best GTM resources to use:\n" + "\n".join(
+        f"- {link}" for link in unique_links
+    ) + "\n\nFor full details, check the GTM Hub."
+
+
+def generate_gemini_answer(question: str) -> str:
+    if not CONFIG.gemini_api_key:
+        logger.warning("GEMINI_API_KEY is not configured; using fallback response")
+        return fallback_answer(question)
+
+    try:
+        genai.configure(api_key=CONFIG.gemini_api_key)
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=GTM_GURU_SYSTEM_PROMPT,
+        )
+        response = model.generate_content(question)
+        answer = (getattr(response, "text", "") or "").strip()
+        if not answer:
+            raise BridgeError("Gemini returned an empty response")
+        return answer
+    except Exception:
+        logger.exception("Gemini call failed; using fallback response")
+        return fallback_answer(question)
+
+
+def answer_group_mention_with_gemini(event: Dict[str, Any]) -> Dict[str, Any]:
     message = event.get("message", {})
-    if message.get("chat_type") != "p2p":
-        return False
     sender_open_id, _ = extract_sender(event)
-    return bool(CONFIG.aime_user_open_id and sender_open_id == CONFIG.aime_user_open_id)
-
-
-def relay_group_mention_to_aime(event: Dict[str, Any]) -> Dict[str, Any]:
-    message = event.get("message", {})
-    sender_open_id, sender_name = extract_sender(event)
     if not store.check_rate_limit(
         sender_open_id or "unknown",
         CONFIG.rate_limit_window_seconds,
         CONFIG.rate_limit_max_messages,
     ):
         raise BridgeError("Rate limit exceeded for sender")
-    if not CONFIG.aime_user_open_id:
-        raise BridgeError("AIME_USER_OPEN_ID must be configured")
 
-    text = parse_message_content(message)
-    bridge_ref = str(uuid.uuid4())
+    question = parse_message_content(message)
+    answer = generate_gemini_answer(question)
+    outbound = f"🎯 GTM GURU:\n{answer}"
     group_message_id = message.get("message_id", "")
-    group_thread_id = message.get("thread_id", "")
-    relay_text = (
-        f"[bridge_ref={bridge_ref}]\n"
-        "GTM GURU bridge request from the Buyer GTM Intake Group. "
-        "Generate the answer for the group; the bridge will mirror your reply back there.\n\n"
-        f"Original sender: {sender_name} ({sender_open_id or 'unknown'})\n"
-        f"Question:\n{text}"
-    )
-    relay_message_id = lark.send_text("open_id", CONFIG.aime_user_open_id, relay_text)
+    if not group_message_id:
+        raise BridgeError("Missing group message_id for reply")
 
-    context = {
-        "bridge_ref": bridge_ref,
-        "group_chat_id": CONFIG.group_id,
-        "group_message_id": group_message_id,
-        "group_thread_id": group_thread_id,
-        "original_sender_open_id": sender_open_id,
-        "original_sender_name": sender_name,
-        "relay_message_id": relay_message_id,
-        "status": "pending",
-    }
-    store.save_context(context)
-    logger.info("Relayed group mention to AIME bridge_ref=%s relay_message_id=%s", bridge_ref, relay_message_id)
-    return {"bridge_ref": bridge_ref, "relay_message_id": relay_message_id, "relayed": True}
-
-
-def mirror_aime_reply_to_group(event: Dict[str, Any]) -> Dict[str, Any]:
-    message = event.get("message", {})
-    text = parse_message_content(message)
-    bridge_ref = extract_bridge_ref(text)
-    row = store.get_by_ref(bridge_ref) if bridge_ref else None
-    if not row:
-        sender_open_id, _ = extract_sender(event)
-        row = store.get_latest_pending_for_sender(sender_open_id)
-    if not row:
-        raise BridgeError("No pending bridge context found for Aime reply")
-
-    clean_text = re.sub(r"\[bridge_ref=[a-f0-9\-]{36}\]", "", text, flags=re.IGNORECASE).strip()
-    outbound = f"🎯 GTM GURU:\n{clean_text}"
-
-    # Prefer replying to the original group message when available. This keeps context tighter.
-    target_group_message_id = row["group_message_id"]
-    if target_group_message_id:
-        mirrored_message_id = lark.reply_text(target_group_message_id, outbound)
-    else:
-        mirrored_message_id = lark.send_text("chat_id", row["group_chat_id"], outbound)
-    store.mark_completed(row["bridge_ref"])
-    logger.info("Mirrored Aime reply bridge_ref=%s message_id=%s", row["bridge_ref"], mirrored_message_id)
-    return {"bridge_ref": row["bridge_ref"], "mirrored_message_id": mirrored_message_id}
+    reply_message_id = lark.reply_text(group_message_id, outbound)
+    logger.info("Answered group mention with Gemini reply_message_id=%s", reply_message_id)
+    return {"reply_message_id": reply_message_id, "answered": True}
 
 
 @app.get("/healthz")
 def healthz():
-    return jsonify({"ok": True, "service": "gtm-guru-lark-bridge", "build": "v5-aime-relay"})
+    return jsonify({"ok": True, "service": "gtm-guru-lark-bridge", "build": "v6-gemini"})
 
 
 @app.get("/version")
@@ -417,8 +360,6 @@ def get_version():
         except Exception:
             commit_hash = "unknown"
     return jsonify({"ok": True, "service": "gtm-guru-lark-bridge", "version": commit_hash})
-
-
 
 
 @app.post("/webhook/lark")
@@ -448,11 +389,8 @@ def lark_event_handler():
 
     try:
         if is_group_mention_event(event):
-            result = relay_group_mention_to_aime(event)
-            return jsonify({"code": 0, "msg": "relayed", "data": result})
-        if is_p2p_reply_from_aime(event):
-            result = mirror_aime_reply_to_group(event)
-            return jsonify({"code": 0, "msg": "mirrored", "data": result})
+            result = answer_group_mention_with_gemini(event)
+            return jsonify({"code": 0, "msg": "answered", "data": result})
         return jsonify({"code": 0, "msg": "ignored"})
     except BridgeError as exc:
         logger.exception("Bridge handling failed")

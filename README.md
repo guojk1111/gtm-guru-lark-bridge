@@ -1,6 +1,6 @@
 # GTM GURU Lark Bridge Bot
 
-A lightweight Flask webhook service that bridges Lark group @mentions to GTM GURU/Aime and mirrors the reply back to the Buyer GTM Intake Group.
+A lightweight Flask webhook service that answers Lark group @mentions with direct Gemini-powered GTM GURU responses in the Buyer GTM Intake Group.
 
 ## What it does
 
@@ -8,9 +8,9 @@ A lightweight Flask webhook service that bridges Lark group @mentions to GTM GUR
 2. Handles Lark URL verification by echoing the challenge.
 3. Validates incoming requests with the Lark verification token and optional bridge bearer token.
 4. Detects @mention messages from the Buyer GTM Intake Group.
-5. Sends the message as a P2P DM to Jackson/GTM GURU with a `[bridge_ref=...]` correlation token.
-6. Receives Jackson/GTM GURU P2P replies and mirrors them back to the originating group message, prefixed with `🎯 GTM GURU:`.
-7. Stores correlation state in SQLite so the service can survive restarts when `/data` is mounted to persistent storage.
+5. Calls Gemini (`gemini-1.5-flash`) directly with GTM GURU context.
+6. Replies to the originating group message, prefixed with `🎯 GTM GURU:`.
+7. Uses SQLite event deduplication so Lark retries do not create duplicate replies.
 
 ## Required Lark app configuration
 
@@ -21,7 +21,6 @@ Required scopes:
 - `im:message.group_at_msg:readonly` — receive group @mention messages.
 - `im:message:send_as_bot` — send messages as the bot.
 - `im:chat` or the current platform equivalent for chat read access.
-- `im:message.p2p_msg:readonly` — required to receive P2P replies from Jackson/GTM GURU. This is included in the implementation plan even though it was not in the short scope list.
 
 Event subscription:
 
@@ -42,9 +41,7 @@ Group:
 | `LARK_ENCRYPT_KEY` | Optional | `***` | Enables signature verification if Lark sends compatible headers. |
 | `BRIDGE_INBOUND_TOKEN` | Optional | `***` | Requires `Authorization: Bearer <token>` on callback requests if set. Usually only use this behind a gateway that can inject the header. |
 | `BUYER_GTM_GROUP_ID` | Yes | `oc_8a963e87591fe5023b7da9a7bfa5c9ee` | Defaults to the Buyer GTM Intake Group ID. |
-| `AIME_USER_OPEN_ID` | Yes | `ou_xxx` | App-scoped open_id for Jackson/GTM GURU. Username/email cannot be used directly by Lark message send API. |
-| `AIME_USER_EMAIL` | No | `jackson.guo@bytedance.com` | For operator reference. |
-| `AIME_USER_DISPLAY_NAME` | No | `Jackson Guo` | For operator reference. |
+| `GEMINI_API_KEY` | Recommended | `***` | Enables direct Gemini answers. If omitted or the API call fails, the bridge replies with structured fallback links. |
 | `SQLITE_PATH` | No | `/data/bridge_state.sqlite3` | Persist this path in production. |
 | `PORT` | No | `8080` | Server port. |
 
@@ -58,7 +55,7 @@ export LARK_APP_ID="cli_xxx"
 export LARK_APP_SECRET="***"
 export LARK_VERIFICATION_TOKEN="***"
 export BUYER_GTM_GROUP_ID="oc_8a963e87591fe5023b7da9a7bfa5c9ee"
-export AIME_USER_OPEN_ID="ou_xxx"
+export GEMINI_API_KEY="***"
 python app.py
 ```
 
@@ -85,7 +82,7 @@ docker run --rm -p 8080:8080 \
   -e LARK_APP_SECRET="***" \
   -e LARK_VERIFICATION_TOKEN="***" \
   -e BUYER_GTM_GROUP_ID="oc_8a963e87591fe5023b7da9a7bfa5c9ee" \
-  -e AIME_USER_OPEN_ID="ou_xxx" \
+  -e GEMINI_API_KEY="***" \
   -v gtm-guru-bridge-data:/data \
   gtm-guru-lark-bridge
 ```
@@ -98,12 +95,12 @@ docker run --rm -p 8080:8080 \
 4. Deploy this service to an HTTPS host reachable by Lark.
 5. Configure the event callback URL to `https://<your-host>/webhook/lark`.
 6. Add **GTM GURU Bot** to the Buyer GTM Intake Group.
-7. Resolve and configure Jackson's app-scoped `AIME_USER_OPEN_ID` for this new app.
-8. Test the end-to-end path: group @mention → Jackson/GTM GURU DM → reply with `[bridge_ref=...]` → group mirror.
+7. Configure `GEMINI_API_KEY` in the deployment environment for direct AI answers.
+8. Test the end-to-end path: group @mention → Gemini-generated `🎯 GTM GURU:` reply in thread.
 
 ## Operational notes
 
-- Keep `[bridge_ref=...]` in the DM reply for deterministic routing. If it is missing, the service falls back to the latest pending context.
+- Keep `GEMINI_API_KEY` configured for AI answers. If Gemini is unavailable, the service returns structured fallback links.
 - For production hardening, run behind a reverse proxy or cloud function gateway with TLS, access logs, and retry protection.
 - The service intentionally does not print app secrets, access tokens, or credentials in logs.
 
