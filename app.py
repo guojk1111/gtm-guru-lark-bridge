@@ -50,13 +50,128 @@ Answer style:
 """
 
 GTM_LINKS = {
-    "hub": "GTM Hub: https://bytedance.larkoffice.com/wiki/HtfdwLhJgi3aavkr8RHcqjKmnke",
-    "how_to": "How to Use GTM Hub: https://bytedance.larkoffice.com/wiki/OCAgwLT4Qi7vsIk14MLc9uzMnzh",
-    "form": "GTM Intake Form: https://bytedance.us.larkoffice.com/share/base/form/shrusXS9K6b1yLohMHQ443kekFf",
-    "tracker": "GTM Intake Tracker: https://bytedance.larkoffice.com/wiki/Lvz0wEuchiPnbhkW1WTcxxApnvb?table=tblvjD6z5aX5U9NU&view=vewBOKkZZp",
-    "process": "Intake Process Doc: https://bytedance.larkoffice.com/wiki/Gxt6wJmWlivKhRkkM8kcxlO0nEV",
-    "template": "One-pager template: https://bytedance.us.larkoffice.com/docx/BPy2d2av9oQSegxo5Hsuy5uXssh",
+    "hub": "🏠 GTM Hub: https://bytedance.larkoffice.com/wiki/HtfdwLhJgi3aavkr8RHcqjKmnke",
+    "how_to": "📖 How to Use GTM Hub: https://bytedance.larkoffice.com/wiki/OCAgwLT4Qi7vsIk14MLc9uzMnzh",
+    "form": "📋 Intake Form: https://bytedance.us.larkoffice.com/share/base/form/shrusXS9K6b1yLohMHQ443kekFf",
+    "tracker": "🔍 Intake Tracker: https://bytedance.larkoffice.com/wiki/Lvz0wEuchiPnbhkW1WTcxxApnvb?table=tblvjD6z5aX5U9NU&view=vewBOKkZZp",
+    "process": "📖 Intake Process Doc: https://bytedance.larkoffice.com/wiki/Gxt6wJmWlivKhRkkM8kcxlO0nEV",
+    "template": "📄 One-pager template: https://bytedance.us.larkoffice.com/docx/BPy2d2av9oQSegxo5Hsuy5uXssh",
 }
+
+INTENT_RULES = [
+    {
+        "name": "intake",
+        "keywords": [
+            "submit",
+            "new request",
+            "intake",
+            "kick off",
+            "kickoff",
+            "start a project",
+            "raise",
+            "file",
+            "how do i submit",
+            "how to submit",
+            "new change",
+        ],
+        "response": (
+            "To submit a new GTM request, fill out the Intake Form — it takes about 5 minutes and auto-routes to the right team. "
+            "Top Down Projects go to @jenniferwang, and all other intake types go to @kevin.cabrera. "
+            "Once it is submitted, you can track progress live in the Intake Tracker."
+        ),
+        "links": ["form", "tracker"],
+    },
+    {
+        "name": "tracker",
+        "keywords": [
+            "tracker",
+            "status",
+            "where is",
+            "my request",
+            "project status",
+            "update",
+            "progress",
+            "what's the status",
+            "whats the status",
+        ],
+        "response": (
+            "Check the GTM Intake Tracker for live project status — it shows the owner, due date, and current stage for active requests. "
+            "If your project is not listed there yet, it likely has not been submitted through the Intake Form."
+        ),
+        "links": ["tracker", "form"],
+    },
+    {
+        "name": "process",
+        "keywords": [
+            "process",
+            "how does",
+            "how do",
+            "steps",
+            "workflow",
+            "procedure",
+            "what happens",
+            "timeline",
+            "lead time",
+            "how long",
+        ],
+        "response": (
+            "The GTM process runs in parallel tracks, so SOP, Ops/Training, and QA are looped in from day one instead of moving sequentially. "
+            "QA must be involved from the start, not after go-live. "
+            "The Intake Process Doc has the full workflow and standard lead-time guidance."
+        ),
+        "links": ["process", "hub"],
+    },
+    {
+        "name": "qa",
+        "keywords": ["qa", "quality", "test", "testing", "sign off", "sign-off", "approval"],
+        "response": (
+            "QA must be looped in at the start of every change — not after go-live. "
+            "That is a hard rule in the GTM process. "
+            "For QA sign-off expectations and checkpoints, use the Intake Process Doc."
+        ),
+        "links": ["process", "hub"],
+    },
+    {
+        "name": "routing",
+        "keywords": [
+            "who",
+            "owner",
+            "route",
+            "routing",
+            "tag",
+            "assign",
+            "responsible",
+            "kevin",
+            "jennifer",
+            "diana",
+            "dazhi",
+        ],
+        "response": (
+            "Routing depends on project type: Top Down Projects should tag @jenniferwang, and all other intake types should tag @kevin.cabrera. "
+            "For downstream coordination, Diana Ornstein supports OPS and Dazhi Yu supports SOP and QA. "
+            "The Intake Process Doc has the full routing logic."
+        ),
+        "links": ["process"],
+    },
+    {
+        "name": "hub",
+        "keywords": ["hub", "where", "find", "resource", "link", "doc", "document", "wiki", "one-pager", "template"],
+        "response": (
+            "The GTM Hub is the single source of truth for US Buyer GTM resources. "
+            "Process docs, trackers, templates, and one-pagers all live there, so it is the best starting point when you are not sure where to look."
+        ),
+        "links": ["hub", "how_to"],
+    },
+    {
+        "name": "scope",
+        "keywords": ["scope", "q3", "q4", "quarter", "in scope", "out of scope", "gne", "business ops", "upstream", "expansion"],
+        "response": (
+            "Q3 2026 is focused on locking the current state, building the shared GTM space, and running the manual GTM flow. "
+            "Upstream expansion to GNE and Business Ops is out of scope for Q3 and planned for Q4 2026."
+        ),
+        "links": ["hub"],
+    },
+]
 
 
 @dataclass(frozen=True)
@@ -280,31 +395,48 @@ def is_group_mention_event(event: Dict[str, Any]) -> bool:
     return message.get("chat_type") == "group" and message.get("chat_id") == CONFIG.group_id
 
 
-def fallback_answer(question: str) -> str:
-    normalized = question.lower()
-    selected_links = []
+def normalize_question(question: str) -> str:
+    return re.sub(r"\s+", " ", question.lower()).strip()
 
-    if any(keyword in normalized for keyword in ["intake", "submit", "request", "form", "new project", "new change"]):
-        selected_links.extend([GTM_LINKS["form"], GTM_LINKS["process"], GTM_LINKS["tracker"]])
-    elif any(keyword in normalized for keyword in ["status", "tracker", "active", "project", "progress", "blocked", "delayed"]):
-        selected_links.extend([GTM_LINKS["tracker"], GTM_LINKS["hub"]])
-    elif any(keyword in normalized for keyword in ["template", "one-pager", "one pager", "brief"]):
-        selected_links.extend([GTM_LINKS["template"], GTM_LINKS["hub"]])
-    elif any(keyword in normalized for keyword in ["qa", "sop", "ops", "process", "routing", "owner"]):
-        selected_links.extend([GTM_LINKS["process"], GTM_LINKS["hub"], GTM_LINKS["how_to"]])
-    else:
-        selected_links.extend([GTM_LINKS["hub"], GTM_LINKS["tracker"]])
 
-    unique_links = list(dict.fromkeys(selected_links))[:3]
-    return "I couldn’t reach Gemini right now, but here are the best GTM resources to use:\n" + "\n".join(
-        f"- {link}" for link in unique_links
-    ) + "\n\nFor full details, check the GTM Hub."
+def count_keyword_matches(normalized_question: str, keywords: list[str]) -> int:
+    return sum(1 for keyword in keywords if keyword in normalized_question)
+
+
+def build_auto_reply(response_text: str, link_keys: list[str]) -> str:
+    unique_links = []
+    for link_key in link_keys:
+        link_value = GTM_LINKS[link_key]
+        if link_value not in unique_links:
+            unique_links.append(link_value)
+    return response_text + "\n" + "\n".join(unique_links[:2])
+
+
+def generate_auto_reply(question: str) -> str:
+    normalized = normalize_question(question)
+    best_rule = None
+    best_score = 0
+
+    for rule in INTENT_RULES:
+        score = count_keyword_matches(normalized, rule["keywords"])
+        if score > best_score:
+            best_rule = rule
+            best_score = score
+
+    if best_rule:
+        return build_auto_reply(best_rule["response"], best_rule["links"])
+
+    default_response = (
+        "I'm GTM GURU — here to help with the US Buyer GTM process. "
+        "Check the GTM Hub for process docs, the Intake Tracker for live project status, or submit a new request through the Intake Form."
+    )
+    return build_auto_reply(default_response, ["hub", "tracker", "form"])
 
 
 def generate_gemini_answer(question: str) -> str:
     if not CONFIG.gemini_api_key:
-        logger.warning("GEMINI_API_KEY is not configured; using fallback response")
-        return fallback_answer(question)
+        logger.info("GEMINI_API_KEY is not configured; using smart auto reply")
+        return generate_auto_reply(question)
 
     try:
         genai.configure(api_key=CONFIG.gemini_api_key)
@@ -346,7 +478,7 @@ def answer_group_mention_with_gemini(event: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.get("/healthz")
 def healthz():
-    return jsonify({"ok": True, "service": "gtm-guru-lark-bridge", "build": "v6-gemini"})
+    return jsonify({"ok": True, "service": "gtm-guru-lark-bridge", "build": "v7-smart-fallback"})
 
 
 @app.get("/version")
