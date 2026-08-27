@@ -33,7 +33,7 @@ class Config:
     inbound_bearer_token: str = os.getenv("BRIDGE_INBOUND_TOKEN") or os.getenv("BRIDGE_SECRET_TOKEN", "")
     group_id: str = os.getenv("BUYER_GTM_GROUP_ID", "oc_8a963e87591fe5023b7da9a7bfa5c9ee")
     # Lark APIs require app-scoped open_id for DMs. Username/email cannot be used directly by the send API.
-    aime_user_open_id: str = os.getenv("AIME_USER_OPEN_ID", "")
+    aime_user_open_id: str = os.getenv("AIME_USER_OPEN_ID", "ou_82ca1e7acc83296b84930b6dd39951da")
     aime_user_email: str = os.getenv("AIME_USER_EMAIL", "jackson.guo@bytedance.com")
     aime_user_display_name: str = os.getenv("AIME_USER_DISPLAY_NAME", "Jackson Guo")
     lark_api_base: str = os.getenv("LARK_API_BASE", "https://open.larksuite.com/open-apis")
@@ -336,34 +336,6 @@ def is_p2p_reply_from_aime(event: Dict[str, Any]) -> bool:
     return bool(CONFIG.aime_user_open_id and sender_open_id == CONFIG.aime_user_open_id)
 
 
-def generate_auto_reply(text: str) -> str:
-    text_lower = text.lower()
-    response_lines = ["🎯 GTM GURU:\nHere is the information you might find helpful:"]
-    added = False
-    
-    if any(k in text_lower for k in ["intake", "process", "form"]):
-        response_lines.append("- Intake Form: https://bytedance.us.larkoffice.com/share/base/form/shrusXS9K6b1yLohMHQ443kekFf")
-        response_lines.append("- Intake Tracker: https://bytedance.larkoffice.com/wiki/Lvz0wEuchiPnbhkW1WTcxxApnvb?table=tblvjD6z5aX5U9NU&view=vewBOKkZZp")
-        response_lines.append("- Intake Process Doc: https://bytedance.larkoffice.com/wiki/Gxt6wJmWlivKhRkkM8kcxlO0nEV")
-        added = True
-    elif "tracker" in text_lower:
-        response_lines.append("- Intake Tracker: https://bytedance.larkoffice.com/wiki/Lvz0wEuchiPnbhkW1WTcxxApnvb?table=tblvjD6z5aX5U9NU&view=vewBOKkZZp")
-        added = True
-        
-    if "hub" in text_lower:
-        response_lines.append("- GTM Hub: https://bytedance.larkoffice.com/wiki/HtfdwLhJgi3aavkr8RHcqjKmnke")
-        response_lines.append("- How to Use GTM Hub: https://bytedance.larkoffice.com/wiki/OCAgwLT4Qi7vsIk14MLc9uzMnzh")
-        added = True
-
-    if not added:
-        response_lines.append("- Intake Form: https://bytedance.us.larkoffice.com/share/base/form/shrusXS9K6b1yLohMHQ443kekFf")
-        response_lines.append("- Intake Tracker: https://bytedance.larkoffice.com/wiki/Lvz0wEuchiPnbhkW1WTcxxApnvb?table=tblvjD6z5aX5U9NU&view=vewBOKkZZp")
-        response_lines.append("- Intake Process Doc: https://bytedance.larkoffice.com/wiki/Gxt6wJmWlivKhRkkM8kcxlO0nEV")
-        response_lines.append("- GTM Hub: https://bytedance.larkoffice.com/wiki/HtfdwLhJgi3aavkr8RHcqjKmnke")
-        
-    return "\n".join(response_lines)
-
-
 def relay_group_mention_to_aime(event: Dict[str, Any]) -> Dict[str, Any]:
     message = event.get("message", {})
     sender_open_id, sender_name = extract_sender(event)
@@ -373,17 +345,21 @@ def relay_group_mention_to_aime(event: Dict[str, Any]) -> Dict[str, Any]:
         CONFIG.rate_limit_max_messages,
     ):
         raise BridgeError("Rate limit exceeded for sender")
+    if not CONFIG.aime_user_open_id:
+        raise BridgeError("AIME_USER_OPEN_ID must be configured")
 
     text = parse_message_content(message)
     bridge_ref = str(uuid.uuid4())
     group_message_id = message.get("message_id", "")
     group_thread_id = message.get("thread_id", "")
-
-    auto_reply_text = generate_auto_reply(text)
-    if group_message_id:
-        lark.reply_text(group_message_id, auto_reply_text)
-    else:
-        lark.send_text("chat_id", CONFIG.group_id, auto_reply_text)
+    relay_text = (
+        f"[bridge_ref={bridge_ref}]\n"
+        "GTM GURU bridge request from the Buyer GTM Intake Group. "
+        "Generate the answer for the group; the bridge will mirror your reply back there.\n\n"
+        f"Original sender: {sender_name} ({sender_open_id or 'unknown'})\n"
+        f"Question:\n{text}"
+    )
+    relay_message_id = lark.send_text("open_id", CONFIG.aime_user_open_id, relay_text)
 
     context = {
         "bridge_ref": bridge_ref,
@@ -392,12 +368,12 @@ def relay_group_mention_to_aime(event: Dict[str, Any]) -> Dict[str, Any]:
         "group_thread_id": group_thread_id,
         "original_sender_open_id": sender_open_id,
         "original_sender_name": sender_name,
-        "relay_message_id": "",
-        "status": "completed",
+        "relay_message_id": relay_message_id,
+        "status": "pending",
     }
     store.save_context(context)
-    logger.info("Auto-replied group mention bridge_ref=%s", bridge_ref)
-    return {"bridge_ref": bridge_ref, "relay_message_id": "", "auto_replied": True}
+    logger.info("Relayed group mention to AIME bridge_ref=%s relay_message_id=%s", bridge_ref, relay_message_id)
+    return {"bridge_ref": bridge_ref, "relay_message_id": relay_message_id, "relayed": True}
 
 
 def mirror_aime_reply_to_group(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -427,7 +403,7 @@ def mirror_aime_reply_to_group(event: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.get("/healthz")
 def healthz():
-    return jsonify({"ok": True, "service": "gtm-guru-lark-bridge", "build": "v4-dedup"})
+    return jsonify({"ok": True, "service": "gtm-guru-lark-bridge", "build": "v5-aime-relay"})
 
 
 @app.get("/version")
