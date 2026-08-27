@@ -409,12 +409,16 @@ def healthz():
 
 @app.get("/version")
 def get_version():
+    import os
     import subprocess
-    try:
-        commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode("utf-8").strip()
-    except Exception:
-        commit_hash = "unknown"
+    commit_hash = os.getenv("RENDER_GIT_COMMIT")
+    if not commit_hash:
+        try:
+            commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode("utf-8").strip()
+        except Exception:
+            commit_hash = "unknown"
     return jsonify({"ok": True, "service": "gtm-guru-lark-bridge", "version": commit_hash})
+
 
 
 
